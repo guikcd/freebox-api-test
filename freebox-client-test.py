@@ -16,7 +16,7 @@ API_BOOTSTRAP = '/api_version'
 API_VERSION = 1
 
 APP_ID = 'org.iroqwa.freebox_stats'
-APP_TOKEN = 'yourtoken'
+TOKEN_FILE = 'token'
 
 AUTH_HEADER = 'X-Fbx-App-Auth'
 USER_AGENT = APP_ID
@@ -25,10 +25,16 @@ class Session:
 
 	def __init__(self):
 		self.api_base_url = self.__get_api_base_url()
-		self.app_token = APP_TOKEN
+		self.app_token = self.__get_token()
 		self.challenge = self.__get_challenge()
 		self.password = self.__calculate_password()
 		self.session_token = self.__get_session_token()
+
+	def __get_token(self):
+		token_file = open(TOKEN_FILE, 'r')
+		read_data = token_file.readlines()[0].rstrip('\n')
+		token_file.close()
+		return read_data
 
 	def __get_api_base_url(self):
 		request = Request(BASEURL + API_BOOTSTRAP)
