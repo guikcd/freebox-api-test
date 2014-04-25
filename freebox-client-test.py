@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
-from urllib2 import urlopen, Request
+import sys
+from urllib2 import urlopen, Request, HTTPError
 from StringIO import StringIO
 import simplejson as json
 
@@ -18,6 +19,7 @@ APP_ID = 'org.iroqwa.freebox_stats'
 APP_TOKEN = 'yourtoken'
 
 AUTH_HEADER = 'X-Fbx-App-Auth'
+USER_AGENT = APP_ID
 
 class Session:
 
@@ -30,52 +32,77 @@ class Session:
 
 	def __get_api_base_url(self):
 		request = Request(BASEURL + API_BOOTSTRAP)
-		response = urlopen(request)
-		result = StringIO(response.read())
-		j = json.load(result)
-		return j['api_base_url']
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			return j['api_base_url']
+		except Exception, e:
+			print("Unexcepted error when connecting to %s: %s" % \
+					(request.get_full_url(), e))
+			sys.exit(e)
 
 	def __get_challenge(self):
-		# get challenge
 		request = Request(BASEURL + self.api_base_url + 'v%d/login/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
-		response = urlopen(request)
-		result = StringIO(response.read())
-		j = json.load(result)
-		return j['result']['challenge']
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			return j['result']['challenge']
+		except Exception, e:
+			j = json.loads(e.readlines()[0])
+			print("Problem in get_challenge(): %s (%s)" % (j['msg'], j['error_code']))
+			sys.exit(e)
 
 	def __calculate_password(self):
 		# http://dev.freebox.fr/sdk/os/login/: password = hmac-sha1(app_token, challenge)
-		hm = hmac.new(self.app_token, self.challenge, sha1)
-		password = hm.hexdigest()
+		myhmac = hmac.new(self.app_token, self.challenge, sha1)
+		password = myhmac.hexdigest()
 		return password
 
 	# login
 	def __get_session_token(self):
-		session_token = '{"app_id": "%s", "password": "%s"}' % (APP_ID, self.password)
+		session_token = '''
+						{
+							"app_id": "%s",
+							"password": "%s"
+						}
+						''' \
+								% (APP_ID, self.password)
 		request = Request(BASEURL + self.api_base_url + 'v%d/login/session/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
+		request.add_header('User-Agent', USER_AGENT)
 		# POST
-		response = urlopen(request, session_token)
-		result = StringIO(response.read())
-		j = json.load(result)
-		if j['success']:
-			return j['result']['session_token']
-		else:
-			print("Error in __get_session_token(): %s" % j['msg'])
-			return None
+		try:
+			response = urlopen(request, session_token)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				return j['result']['session_token']
+			else:
+				print("Error in __get_session_token(): %s" % j['msg'])
+				return None
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to get session token: %s (%s)" % (j['msg'], j['error_code']))
+			sys.exit(e)
 
-	# FIXME
 	def logout(self):
-		request = Request(BASEURL + self.api_base_url + 'v%d/login/session/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
+		request = Request(BASEURL + self.api_base_url + 'v%d/login/logout/' % API_VERSION)
 		request.add_header(AUTH_HEADER, self.session_token)
-		# force POST to submit session_token (not needed as well)
-		response = urlopen(request, self.session_token)
-		result = StringIO(response.read())
-		j = json.load(result)
-		if not j['success']:
-			print("Error when logout (%s)" % j['msg'])
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			# force POST
+			response = urlopen(request, "")
+			result = StringIO(response.read())
+			j = json.load(result)
+			if not j['success']:
+				print("Error when logout (%s)" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable logout: %s (%s)" % (j['msg'], j['error_code']))
+			sys.exit(e)
 
 class RRDFetch:
 	def __init__(self, session):
@@ -94,18 +121,23 @@ class RRDFetch:
 					"precision": %d
 				 }''' % (db, self.date_start, self.date_end, field, self.precision)
 		request = Request(BASEURL + self.session.api_base_url + 'v%d/rrd/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
 		request.add_header(AUTH_HEADER, self.session.session_token)
-		# POST
-		response = urlopen(request, stats)
-		result = StringIO(response.read())
-		j = json.load(result)
-		if j['success']:
-			#print("success %s" % j['result']['data'])
-			last_index = len(j['result']['data']) - 1
-			return j['result']['data'][last_index][field]
-		else:
-			print("Problem in get_rrd(): %s" % j['msg'])
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			# POST
+			response = urlopen(request, stats)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				#print("success %s" % j['result']['data'])
+				last_index = len(j['result']['data']) - 1
+				return j['result']['data'][last_index][field]
+			else:
+				print("Problem in get_rrd(): %s" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to get connection status : %s (%s)" % (j['msg'], j['error_code'] ))
+			sys.exit(e)
 
 # http://dev.freebox.fr/sdk/os/connection/
 class Connection:
@@ -115,15 +147,20 @@ class Connection:
 
 	def get_connection_status(self):
 		request = Request(BASEURL + self.session.api_base_url + 'v%d/connection/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
 		request.add_header(AUTH_HEADER, self.session.session_token)
-		response = urlopen(request)
-		result = StringIO(response.read())
-		j = json.load(result)
-		if j['success']:
-			return j['result']
-		else:
-			print("%s" % j['msg'])
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				return j['result']
+			else:
+				print("%s" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to get connection status : %s (%s)" % (j['msg'], j['error_code'] ))
+			sys.exit(e)
 
 class System:
 
@@ -132,15 +169,20 @@ class System:
 
 	def get_system_info(self):
 		request = Request(BASEURL + self.session.api_base_url + 'v%d/system/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
 		request.add_header(AUTH_HEADER, self.session.session_token)
-		response = urlopen(request)
-		result = StringIO(response.read())
-		j = json.load(result)
-		if j['success']:
-			return j['result']
-		else:
-			print("%s" % j['msg'])
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				return j['result']
+			else:
+				print("%s" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to get system info : %s (%s)" % (j['msg'], j['error_code'] ))
+			sys.exit(e)
 
 class Lan():
 
@@ -149,16 +191,42 @@ class Lan():
 
 	def get_lan_info(self):
 		request = Request(BASEURL + self.session.api_base_url + 'v%d/lan/browser/pub/' % API_VERSION)
-		request.add_header('Content-type', 'application/json')
 		request.add_header(AUTH_HEADER, self.session.session_token)
-		response = urlopen(request)
-		result = StringIO(response.read())
-		j = json.load(result)
-		if j['success']:
-			return j['result']
-		else:
-			print("%s" % j['msg'])
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				return j['result']
+			else:
+				print("%s" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to get lan info : %s (%s)" % (j['msg'], j['error_code'] ))
+			sys.exit(e)
 
+class Igd():
+
+	def __init__(self, session):
+		self.session = session
+
+	def get_redirections(self):
+		request = Request(BASEURL + self.session.api_base_url + 'v%d/upnpigd/redir/' % API_VERSION)
+		request.add_header(AUTH_HEADER, self.session.session_token)
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				return j['result']
+			else:
+				print("%s" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to get igd redirections : %s (%s)" % (j['msg'], j['error_code'] ))
+			sys.exit(e)
 
 if __name__ == "__main__":
 	session = Session()
@@ -173,4 +241,17 @@ if __name__ == "__main__":
 	lan = Lan(session)
 	import pprint
 	pp = pprint.PrettyPrinter()
-	pp.pprint(lan.get_lan_info())
+	infos = lan.get_lan_info()
+	#pp.pprint(infos)
+	for info in infos:
+		if info['active'] is True:
+			print(info)
+			print(info['names'], info['l3connectivities'][0]['addr'])
+			print("###############################################")
+	igd = Igd(session)
+	redirections = igd.get_redirections()
+	#pp.pprint(redirections)
+	for redirection in redirections:
+		if redirection['int_ip'] not in '192.168.0.249':
+			print(redirection['desc'], redirection['int_ip'])
+	session.logout()
