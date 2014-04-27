@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# -*- coding: utf-8 -*-
 
 import sys
 from urllib2 import urlopen, Request, HTTPError
@@ -10,6 +11,8 @@ from hashlib import sha1
 import hmac
 
 from time import time
+
+from lxml import etree
 
 BASEURL = 'http://mafreebox.freebox.fr'
 API_BOOTSTRAP = '/api_version'
@@ -187,7 +190,24 @@ class System:
 				print("%s" % j['msg'])
 		except HTTPError, e:
 			j = json.loads(e.readlines()[0])
-			print("Unable to get system info : %s (%s)" % (j['msg'], j['error_code'] ))
+			print("Unable to get system info : %s (%s)" % (j['msg'], j['error_code']))
+			sys.exit(e)
+
+	def reboot(self):
+		request = Request(BASEURL + self.session.api_base_url + 'v%d/system/reboot/' % API_VERSION)
+		request.add_header(AUTH_HEADER, self.session.session_token)
+		request.add_header('User-Agent', USER_AGENT)
+		try:
+			response = urlopen(request)
+			result = StringIO(response.read())
+			j = json.load(result)
+			if j['success']:
+				return j['result']
+			else:
+				print("%s" % j['msg'])
+		except HTTPError, e:
+			j = json.loads(e.readlines()[0])
+			print("Unable to reboot system: %s (%s)" % (j['msg'], j['error_code']))
 			sys.exit(e)
 
 class Lan():
@@ -234,6 +254,25 @@ class Igd():
 			print("Unable to get igd redirections : %s (%s)" % (j['msg'], j['error_code'] ))
 			sys.exit(e)
 
+class DevFreeboxFrBlog():
+	def is_firmware_up2date(self, current_firmware_version):
+		url = 'http://dev.freebox.fr/blog/?feed=rss2&cat=1'
+		response = urlopen(url)
+		xml = etree.parse(response)
+
+		#if xml.findall('//title')[1].text in 'Mise \xe0 jour du Freebox Server':
+		# [0] is 'L'actualité de la Freebox » Mise à jour'
+		first_line = xml.findall('//title')[1].text
+		# ex. 'Mise \xe0 jour du Freebox Server 2.1.0' if OK
+		if 'jour du Freebox Server' in first_line:
+			#if first_line.split(" ")[-1] in current_firmware_version:
+			if first_line.split(" ")[-1] == current_firmware_version:
+				return True
+			else:
+				print("Update available: %s (current: %s)" % \
+						(first_line.split(" ")[-1], current_firmware_version))
+				return False
+
 if __name__ == "__main__":
 	session = Session()
 	#rrdfetch = RRDFetch(session)
@@ -242,22 +281,25 @@ if __name__ == "__main__":
 	#connection = Connection(session)
 	#connection_status = connection.get_connection_status()
 	#print(connection_status['rate_down'], connection_status['rate_up'])
-	#system = System(session)
-	#print(system.get_system_info())
-	lan = Lan(session)
-	import pprint
-	pp = pprint.PrettyPrinter()
-	infos = lan.get_lan_info()
-	#pp.pprint(infos)
-	for info in infos:
-		if info['active'] is True:
-			print(info)
-			print(info['names'], info['l3connectivities'][0]['addr'])
-			print("###############################################")
-	igd = Igd(session)
-	redirections = igd.get_redirections()
-	#pp.pprint(redirections)
-	for redirection in redirections:
-		if redirection['int_ip'] not in '192.168.0.249':
-			print(redirection['desc'], redirection['int_ip'])
+	system = System(session)
+	#lan = Lan(session)
+	#import pprint
+	#pp = pprint.PrettyPrinter()
+	#infos = lan.get_lan_info()
+	##pp.pprint(infos)
+	#for info in infos:
+	#	if info['active'] is True:
+	#		print(info)
+	#		print(info['names'], info['l3connectivities'][0]['addr'])
+	#		print("###############################################")
+	#igd = Igd(session)
+	#redirections = igd.get_redirections()
+	##pp.pprint(redirections)
+	#for redirection in redirections:
+	#	if redirection['int_ip'] not in '192.168.0.249':
+	#		print(redirection['desc'], redirection['int_ip'])
+	dev = DevFreeboxFrBlog()
+	#if not dev.is_firmware_up2date(system.get_system_info()['firmware_version']):
+	if not dev.is_firmware_up2date('2.0.0'):
+		print("system.reboot()")
 	session.logout()
